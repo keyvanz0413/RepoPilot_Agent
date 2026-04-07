@@ -76,25 +76,25 @@ class Orchestrator:
                 continue
 
             if ctx.state == RunState.PLAN:
-                ctx.plan_steps = self._build_plan(ctx)
                 ctx.execution_plan = self.planner.run(ctx)
                 self._log(ctx, "execution_plan_built", asdict(ctx.execution_plan))
+                ctx.plan_steps = self._build_plan(ctx)
                 ctx.state = next_state(ctx.state)
                 continue
 
             if ctx.state == RunState.EDIT:
-                ctx.tool_results.append(self.tool_registry.run("create_checkpoint"))
+                checkpoint_result = self.tool_registry.run("create_checkpoint")
+                ctx.tool_results.append(checkpoint_result)
+                ctx.checkpoint_ref = checkpoint_result.data.get("checkpoint_ref")
                 ctx.edit_result = self.coder.run(ctx)
                 self._log(ctx, "edit_attempted", asdict(ctx.edit_result))
                 ctx.state = next_state(ctx.state)
                 continue
 
             if ctx.state == RunState.TEST:
-                test_cmd = ctx.task_input.test_command
-                if test_cmd:
-                    ctx.tool_results.append(
-                        self.tool_registry.run("run_test", command=test_cmd)
-                    )
+                commands = ctx.execution_plan.tests_to_run if ctx.execution_plan else []
+                for command in commands:
+                    ctx.tool_results.append(self.tool_registry.run("run_test", command=command))
                 ctx.state = next_state(ctx.state)
                 continue
 
@@ -106,8 +106,20 @@ class Orchestrator:
 
             if ctx.state == RunState.RECOVER:
                 ctx.recovery_action = self.recovery_manager.run(ctx)
+                if ctx.recovery_action.rollback_files and ctx.edit_result:
+                    for rel_path in ctx.recovery_action.rollback_files:
+                        original = ctx.edit_result.original_contents.get(rel_path)
+                        if original is None:
+                            continue
+                        restore_result = self.tool_registry.run(
+                            "write_file",
+                            path=str(Path(ctx.task_input.repo_root) / rel_path),
+                            content=original,
+                        )
+                        ctx.tool_results.append(restore_result)
                 self._log(ctx, "recovery_decided", asdict(ctx.recovery_action))
                 ctx.failure_reason = ctx.recovery_action.reason
+                ctx.recovery_attempts += 1
                 ctx.state = RunState(ctx.recovery_action.next_state)
                 continue
 
@@ -164,7 +176,10 @@ class Orchestrator:
             plan.append(ctx.contract_report.summary)
         if ctx.impact_report is not None:
             plan.append(ctx.impact_report.summary)
-        if ctx.task_input.test_command:
+        if ctx.execution_plan and ctx.execution_plan.tests_to_run:
+            for command in ctx.execution_plan.tests_to_run:
+                plan.append(f"Run validation command: {command}")
+        elif ctx.task_input.test_command:
             plan.append(f"Run validation command: {ctx.task_input.test_command}")
         else:
             plan.append("Skip test execution because no test command was provided")

@@ -63,6 +63,16 @@ class ImpactAnalyzer:
             report.impact_reasons.append("Related test files mention the target symbol")
         if not report.affected_files:
             report.impact_reasons.append("No references found outside contract search")
+        elif not report.related_tests:
+            for path in report.affected_files:
+                stem = Path(path).stem
+                candidate_tests = list(self.repo_root.rglob(f"test*{stem}*.py"))
+                for test_path in candidate_tests:
+                    rel = str(test_path.relative_to(self.repo_root))
+                    related_tests.add(rel)
+            report.related_tests = sorted(related_tests)
+            if report.related_tests:
+                report.impact_reasons.append("Matched likely test files by affected module names")
 
         report.summary = (
             f"Found {reference_count} reference(s) across {len(report.affected_files)} file(s)."

@@ -21,12 +21,14 @@ from repopilot.tools.tool_registry import ToolRegistry
 def build_registry(repo_root: str) -> ToolRegistry:
     safety_guard = SafetyGuard(repo_root=repo_root)
     file_tools = FileTools(repo_root)
+    git_tools = GitTools(repo_root)
     registry = ToolRegistry(safety_guard=safety_guard)
     registry.register("read_file", file_tools.read_file, read_only=True)
     registry.register("write_file", file_tools.write_file)
     registry.register("search_text", SearchTools(repo_root).search_text, read_only=True)
-    registry.register("create_checkpoint", GitTools(repo_root).create_checkpoint)
-    registry.register("run_test", TestRunner().run_test)
+    registry.register("create_checkpoint", git_tools.create_checkpoint)
+    registry.register("revert_checkpoint", git_tools.revert_checkpoint)
+    registry.register("run_test", TestRunner(repo_root).run_test)
     return registry
 
 

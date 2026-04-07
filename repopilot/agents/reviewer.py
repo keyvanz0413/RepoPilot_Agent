@@ -13,7 +13,13 @@ class Reviewer:
         if not ctx.edit_result.applied:
             findings.append(ctx.edit_result.summary)
 
-        if ctx.task_input.test_command:
+        expected_tests = []
+        if ctx.execution_plan and ctx.execution_plan.tests_to_run:
+            expected_tests = ctx.execution_plan.tests_to_run
+        elif ctx.task_input.test_command:
+            expected_tests = [ctx.task_input.test_command]
+
+        if expected_tests:
             test_tool = next((item for item in reversed(ctx.tool_results) if item.tool_name == "run_test"), None)
             if test_tool is None:
                 findings.append("Expected test execution result is missing")

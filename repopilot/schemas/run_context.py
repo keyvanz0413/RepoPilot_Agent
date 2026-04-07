@@ -29,5 +29,7 @@ class RunContext:
     review_report: ReviewReport | None = None
     recovery_action: RecoveryAction | None = None
     tool_results: list[ToolResult] = field(default_factory=list)
+    checkpoint_ref: str | None = None
+    recovery_attempts: int = 0
     failure_reason: str | None = None
     log_path: str | None = None

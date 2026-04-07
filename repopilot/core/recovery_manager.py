@@ -6,11 +6,19 @@ from repopilot.schemas.run_context import RunContext
 
 class RecoveryManager:
     def run(self, ctx: RunContext) -> RecoveryAction:
-        if ctx.review_report and ctx.review_report.decision == "revise":
+        if (
+            ctx.review_report
+            and ctx.review_report.decision == "revise"
+            and ctx.edit_result
+            and ctx.edit_result.applied
+            and ctx.edit_result.changed_files
+            and ctx.recovery_attempts == 0
+        ):
             return RecoveryAction(
-                action="abort",
+                action="rollback",
                 next_state="FAILED",
-                reason="Conservative recovery: stop after one failed review cycle.",
+                reason="Rollback applied after a failed review on the first recovery attempt.",
+                rollback_files=list(ctx.edit_result.changed_files),
             )
         return RecoveryAction(
             action="abort",

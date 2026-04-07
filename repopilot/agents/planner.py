@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+
 from repopilot.schemas.plan import ExecutionPlan, PlanStep
 from repopilot.schemas.run_context import RunContext
 
@@ -23,9 +25,7 @@ class Planner:
                 files_involved=ctx.contract_report.matched_files if ctx.contract_report else [],
             ),
         ]
-        tests_to_run: list[str] = []
-        if ctx.task_input.test_command:
-            tests_to_run.append(ctx.task_input.test_command)
+        tests_to_run: list[str] = self._select_tests(ctx)
         return ExecutionPlan(
             goal=ctx.task_input.raw_text,
             steps=steps,
@@ -34,3 +34,15 @@ class Planner:
             risk_level=ctx.impact_report.risk_level if ctx.impact_report else "medium",
             summary="Built a conservative execution plan from repo context.",
         )
+
+    def _select_tests(self, ctx: RunContext) -> list[str]:
+        if ctx.task_input.test_command:
+            return [ctx.task_input.test_command]
+        if (
+            ctx.impact_report
+            and ctx.impact_report.related_tests
+            and importlib.util.find_spec("pytest") is not None
+        ):
+            joined = " ".join(ctx.impact_report.related_tests[:5])
+            return [f"python3 -m pytest {joined}"]
+        return []

@@ -50,6 +50,7 @@ class Coder:
             applied=True,
             changed_files=[contract.path],
             summary=f"Added optional parameter to {contract.symbol} in {contract.path}.",
+            original_contents={contract.path: original},
         )
 
     def _supports_task(self, task_text: str) -> bool:
