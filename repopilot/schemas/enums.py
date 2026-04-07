@@ -1,0 +1,14 @@
+from enum import Enum
+
+
+class RunState(str, Enum):
+    INIT = "INIT"
+    ANALYZE_TASK = "ANALYZE_TASK"
+    MAP_REPO = "MAP_REPO"
+    VALIDATE_CONTRACT = "VALIDATE_CONTRACT"
+    ANALYZE_IMPACT = "ANALYZE_IMPACT"
+    PLAN = "PLAN"
+    EDIT = "EDIT"
+    TEST = "TEST"
+    DONE = "DONE"
+    FAILED = "FAILED"

@@ -1,0 +1,19 @@
+[project]
+name = "repopilot"
+version = "0.1.0"
+description = "Minimal runtime skeleton for RepoPilot"
+requires-python = ">=3.11"
+
+[project.scripts]
+repopilot = "repopilot.app.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["repopilot*"]
