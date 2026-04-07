@@ -27,7 +27,7 @@ class ToolRegistry:
         try:
             if name == "run_test":
                 self.safety_guard.ensure_command_allowed(kwargs["command"])
-            if name == "read_file":
+            if name in {"read_file", "write_file"}:
                 self.safety_guard.ensure_path_allowed(kwargs["path"])
             result = tool.handler(**kwargs)
             return ToolResult(

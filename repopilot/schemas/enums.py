@@ -10,5 +10,7 @@ class RunState(str, Enum):
     PLAN = "PLAN"
     EDIT = "EDIT"
     TEST = "TEST"
+    REVIEW = "REVIEW"
+    RECOVER = "RECOVER"
     DONE = "DONE"
     FAILED = "FAILED"

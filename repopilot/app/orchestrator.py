@@ -3,10 +3,14 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 
+from repopilot.agents.coder import Coder
+from repopilot.agents.planner import Planner
+from repopilot.agents.reviewer import Reviewer
 from repopilot.app.logging import JsonlLogger
 from repopilot.app.state_machine import TERMINAL_STATES, next_state
 from repopilot.core.contract_validator import ContractValidator
 from repopilot.core.impact_analyzer import ImpactAnalyzer
+from repopilot.core.recovery_manager import RecoveryManager
 from repopilot.core.repo_mapper import RepoMapper
 from repopilot.schemas.enums import RunState
 from repopilot.schemas.run_context import RunContext
@@ -21,11 +25,16 @@ class Orchestrator:
         self.repo_mapper = RepoMapper(".")
         self.contract_validator = ContractValidator(".")
         self.impact_analyzer = ImpactAnalyzer(".")
+        self.planner = Planner()
+        self.reviewer = Reviewer()
+        self.recovery_manager = RecoveryManager()
+        self.coder = Coder(tool_registry, ".")
 
     def run(self, ctx: RunContext) -> RunContext:
         self.repo_mapper = RepoMapper(ctx.task_input.repo_root)
         self.contract_validator = ContractValidator(ctx.task_input.repo_root)
         self.impact_analyzer = ImpactAnalyzer(ctx.task_input.repo_root)
+        self.coder = Coder(self.tool_registry, ctx.task_input.repo_root)
         self._log(ctx, "run_started", {"repo_root": ctx.task_input.repo_root})
 
         while ctx.state not in TERMINAL_STATES:
@@ -68,13 +77,15 @@ class Orchestrator:
 
             if ctx.state == RunState.PLAN:
                 ctx.plan_steps = self._build_plan(ctx)
+                ctx.execution_plan = self.planner.run(ctx)
+                self._log(ctx, "execution_plan_built", asdict(ctx.execution_plan))
                 ctx.state = next_state(ctx.state)
                 continue
 
             if ctx.state == RunState.EDIT:
-                ctx.tool_results.append(
-                    self.tool_registry.run("create_checkpoint")
-                )
+                ctx.tool_results.append(self.tool_registry.run("create_checkpoint"))
+                ctx.edit_result = self.coder.run(ctx)
+                self._log(ctx, "edit_attempted", asdict(ctx.edit_result))
                 ctx.state = next_state(ctx.state)
                 continue
 
@@ -85,6 +96,19 @@ class Orchestrator:
                         self.tool_registry.run("run_test", command=test_cmd)
                     )
                 ctx.state = next_state(ctx.state)
+                continue
+
+            if ctx.state == RunState.REVIEW:
+                ctx.review_report = self.reviewer.run(ctx)
+                self._log(ctx, "review_completed", asdict(ctx.review_report))
+                ctx.state = RunState.DONE if ctx.review_report.decision == "pass" else RunState.RECOVER
+                continue
+
+            if ctx.state == RunState.RECOVER:
+                ctx.recovery_action = self.recovery_manager.run(ctx)
+                self._log(ctx, "recovery_decided", asdict(ctx.recovery_action))
+                ctx.failure_reason = ctx.recovery_action.reason
+                ctx.state = RunState(ctx.recovery_action.next_state)
                 continue
 
             ctx.failure_reason = f"Unhandled state: {ctx.state}"

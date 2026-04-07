@@ -29,3 +29,11 @@ python -m repopilot.app.main "run validation" --repo-root . --test-command "pyte
 - `ContractValidator`
 - `ImpactAnalyzer`
 - Extended states: `MAP_REPO`, `VALIDATE_CONTRACT`, `ANALYZE_IMPACT`
+
+## Included in step three
+
+- `Planner`
+- Conservative `Coder`
+- `Reviewer`
+- `RecoveryManager`
+- Extended states: `REVIEW`, `RECOVER`

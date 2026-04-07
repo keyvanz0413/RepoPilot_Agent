@@ -15,6 +15,6 @@ def next_state(current: RunState) -> RunState:
         RunState.ANALYZE_IMPACT: RunState.PLAN,
         RunState.PLAN: RunState.EDIT,
         RunState.EDIT: RunState.TEST,
-        RunState.TEST: RunState.DONE,
+        RunState.TEST: RunState.REVIEW,
     }
     return transitions.get(current, RunState.FAILED)

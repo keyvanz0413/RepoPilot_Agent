@@ -20,3 +20,12 @@ class FileTools:
         base = self.safety_guard.ensure_path_allowed(root or str(self.safety_guard.repo_root))
         files = [str(path) for path in base.rglob("*") if path.is_file()]
         return {"root": str(base), "files": files}
+
+    def write_file(self, path: str, content: str) -> dict:
+        resolved = self.safety_guard.ensure_path_allowed(path)
+        resolved.write_text(content, encoding="utf-8")
+        return {
+            "path": str(resolved),
+            "written": True,
+            "size": len(content),
+        }
