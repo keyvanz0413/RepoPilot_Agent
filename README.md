@@ -21,6 +21,13 @@ REPOPILOT_RETRIEVAL_DECISION_JSON='{"retrieval_level":"LOCAL","search_targets":[
 python -m repopilot.app.main "解释 state_machine" --repo-root .
 ```
 
+Optional Codex-style edit executor override for local testing:
+
+```bash
+REPOPILOT_CODEX_EDIT_JSON='{"summary":"Applied Codex edit","edits":[{"path":"repopilot/app/state_machine.py","content":"...full file content..."}]}' \
+python -m repopilot.app.main "update state_machine" --repo-root .
+```
+
 ## Retrieval Flow
 
 RepoPilot now uses three retrieval levels:
@@ -41,6 +48,8 @@ DECIDE_RETRIEVAL
 ```
 
 `VALIDATE_CONTRACT` and `ANALYZE_IMPACT` now consume retrieval outputs as candidate file scopes instead of silently widening to repo-wide search inside the same node.
+
+`EDIT` can now delegate file writing to a Codex-style executor when `REPOPILOT_CODEX_EDIT_JSON` is provided; otherwise it falls back to the built-in conservative patcher.
 
 ## Included in step one
 

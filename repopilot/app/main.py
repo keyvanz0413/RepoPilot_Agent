@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from repopilot.app.logging import JsonlLogger
 from repopilot.app.orchestrator import Orchestrator
+from repopilot.models.codex import EnvJSONCodexExecutor
 from repopilot.models.llm import EnvJSONRetrievalLLM
 from repopilot.schemas.run_context import RunContext
 from repopilot.schemas.task import TaskInput
@@ -67,6 +68,8 @@ def main() -> None:
         orchestrator.retrieval_decider.mode = (
             os.environ.get("REPOPILOT_RETRIEVAL_MODE", "auto").lower()
         )
+    if "REPOPILOT_CODEX_EDIT_JSON" in os.environ:
+        orchestrator.coder.executor = EnvJSONCodexExecutor()
     result = orchestrator.run(ctx)
     print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
 

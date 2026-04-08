@@ -36,11 +36,12 @@ class Orchestrator:
         self.coder = Coder(tool_registry, ".")
 
     def run(self, ctx: RunContext) -> RunContext:
+        coder_executor = self.coder.executor
         self.repo_mapper = RepoMapper(ctx.task_input.repo_root)
         self.contract_validator = ContractValidator(ctx.task_input.repo_root)
         self.impact_analyzer = ImpactAnalyzer(ctx.task_input.repo_root)
         self.local_retriever = LocalRetriever(self.tool_registry, ctx.task_input.repo_root)
-        self.coder = Coder(self.tool_registry, ctx.task_input.repo_root)
+        self.coder = Coder(self.tool_registry, ctx.task_input.repo_root, executor=coder_executor)
         self._log(ctx, "run_started", {"repo_root": ctx.task_input.repo_root})
 
         while ctx.state not in TERMINAL_STATES:
