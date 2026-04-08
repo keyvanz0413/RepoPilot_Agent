@@ -10,9 +10,12 @@ from repopilot.app.logging import JsonlLogger
 from repopilot.app.state_machine import TERMINAL_STATES, next_state
 from repopilot.core.contract_validator import ContractValidator
 from repopilot.core.impact_analyzer import ImpactAnalyzer
+from repopilot.core.local_retriever import LocalRetriever
 from repopilot.core.recovery_manager import RecoveryManager
 from repopilot.core.repo_mapper import RepoMapper
+from repopilot.core.retrieval_decider import RetrievalDecider
 from repopilot.schemas.enums import RunState
+from repopilot.schemas.retrieval import RetrievalLevel
 from repopilot.schemas.run_context import RunContext
 from repopilot.schemas.task import TaskSpec
 from repopilot.tools.tool_registry import ToolRegistry
@@ -25,6 +28,8 @@ class Orchestrator:
         self.repo_mapper = RepoMapper(".")
         self.contract_validator = ContractValidator(".")
         self.impact_analyzer = ImpactAnalyzer(".")
+        self.local_retriever = LocalRetriever(tool_registry, ".")
+        self.retrieval_decider = RetrievalDecider()
         self.planner = Planner()
         self.reviewer = Reviewer()
         self.recovery_manager = RecoveryManager()
@@ -34,6 +39,7 @@ class Orchestrator:
         self.repo_mapper = RepoMapper(ctx.task_input.repo_root)
         self.contract_validator = ContractValidator(ctx.task_input.repo_root)
         self.impact_analyzer = ImpactAnalyzer(ctx.task_input.repo_root)
+        self.local_retriever = LocalRetriever(self.tool_registry, ctx.task_input.repo_root)
         self.coder = Coder(self.tool_registry, ctx.task_input.repo_root)
         self._log(ctx, "run_started", {"repo_root": ctx.task_input.repo_root})
 
@@ -49,6 +55,57 @@ class Orchestrator:
                 ctx.state = next_state(ctx.state)
                 continue
 
+            if ctx.state == RunState.DECIDE_RETRIEVAL:
+                if ctx.task_spec is None:
+                    ctx.failure_reason = "Task spec missing before retrieval decision"
+                    ctx.state = RunState.FAILED
+                    continue
+                ctx.retrieval_decision = self.retrieval_decider.run(ctx.task_spec)
+                self._log(ctx, "retrieval_decided", asdict(ctx.retrieval_decision))
+                if ctx.retrieval_decision.retrieval_level == RetrievalLevel.GLOBAL:
+                    ctx.state = RunState.MAP_REPO
+                elif ctx.retrieval_decision.retrieval_level == RetrievalLevel.LOCAL:
+                    ctx.state = next_state(ctx.state)
+                else:
+                    ctx.state = RunState.VALIDATE_CONTRACT
+                continue
+
+            if ctx.state == RunState.LOCAL_RETRIEVE:
+                if ctx.retrieval_decision is None:
+                    ctx.failure_reason = "Retrieval decision missing before local retrieval"
+                    ctx.state = RunState.FAILED
+                    continue
+                ctx.local_retrieval_report = self.local_retriever.run(ctx.retrieval_decision)
+                self._log(ctx, "local_retrieval_completed", asdict(ctx.local_retrieval_report))
+                ctx.state = next_state(ctx.state)
+                continue
+
+            if ctx.state == RunState.ESCALATE_RETRIEVAL:
+                if ctx.retrieval_decision is None:
+                    ctx.failure_reason = "Retrieval decision missing before retrieval escalation"
+                    ctx.state = RunState.FAILED
+                    continue
+                ctx.retrieval_escalations += 1
+                ctx.retrieval_decision.retrieval_level = RetrievalLevel.GLOBAL
+                ctx.retrieval_decision.fallback_used = True
+                ctx.retrieval_decision.reason = (
+                    "Local retrieval was insufficient, so the workflow escalated to GLOBAL retrieval."
+                )
+                ctx.retrieval_decision.summary = (
+                    f"Retrieval decision: {ctx.retrieval_decision.retrieval_level.value}"
+                    f" for {ctx.task_spec.task_type if ctx.task_spec else 'task'} after escalation."
+                )
+                self._log(
+                    ctx,
+                    "retrieval_escalated",
+                    {
+                        "retrieval_level": ctx.retrieval_decision.retrieval_level,
+                        "retrieval_escalations": ctx.retrieval_escalations,
+                    },
+                )
+                ctx.state = next_state(ctx.state)
+                continue
+
             if ctx.state == RunState.MAP_REPO:
                 ctx.repo_map = self.repo_mapper.run()
                 self._log(ctx, "repo_mapped", asdict(ctx.repo_map))
@@ -60,8 +117,14 @@ class Orchestrator:
                     ctx.failure_reason = "Task spec missing before contract validation"
                     ctx.state = RunState.FAILED
                     continue
-                ctx.contract_report = self.contract_validator.run(ctx.task_spec)
+                ctx.contract_report = self.contract_validator.run(
+                    ctx.task_spec,
+                    candidate_files=self._candidate_files_for_contract(ctx),
+                )
                 self._log(ctx, "contract_validated", asdict(ctx.contract_report))
+                if self._should_escalate_after_contract(ctx):
+                    ctx.state = RunState.ESCALATE_RETRIEVAL
+                    continue
                 ctx.state = next_state(ctx.state)
                 continue
 
@@ -70,8 +133,14 @@ class Orchestrator:
                     ctx.failure_reason = "Contract report missing before impact analysis"
                     ctx.state = RunState.FAILED
                     continue
-                ctx.impact_report = self.impact_analyzer.run(ctx.contract_report)
+                ctx.impact_report = self.impact_analyzer.run(
+                    ctx.contract_report,
+                    candidate_files=self._candidate_files_for_impact(ctx),
+                )
                 self._log(ctx, "impact_analyzed", asdict(ctx.impact_report))
+                if self._should_escalate_after_impact(ctx):
+                    ctx.state = RunState.ESCALATE_RETRIEVAL
+                    continue
                 ctx.state = next_state(ctx.state)
                 continue
 
@@ -140,7 +209,9 @@ class Orchestrator:
     def _analyze_task(self, ctx: RunContext) -> TaskSpec:
         text = ctx.task_input.raw_text.strip()
         lowered = text.lower()
-        if "test" in lowered:
+        if "explain" in lowered or "analyze" in lowered or "解释" in text or "分析" in text:
+            task_type = "explain_repo"
+        elif "test" in lowered:
             task_type = "add_test"
         elif "bug" in lowered or "fix" in lowered:
             task_type = "bug_fix"
@@ -172,6 +243,10 @@ class Orchestrator:
         ]
         if ctx.repo_map is not None:
             plan.append(ctx.repo_map.summary)
+        if ctx.local_retrieval_report is not None:
+            plan.append(ctx.local_retrieval_report.summary)
+        if ctx.retrieval_decision is not None:
+            plan.append(ctx.retrieval_decision.summary)
         if ctx.contract_report is not None:
             plan.append(ctx.contract_report.summary)
         if ctx.impact_report is not None:
@@ -189,3 +264,47 @@ class Orchestrator:
     def _log(self, ctx: RunContext, event_type: str, payload: dict) -> None:
         path = self.logger.write(ctx.run_id, event_type, payload)
         ctx.log_path = str(path)
+
+    def _candidate_files_for_contract(self, ctx: RunContext) -> list[str] | None:
+        if ctx.local_retrieval_report and ctx.local_retrieval_report.matched_files:
+            return list(ctx.local_retrieval_report.matched_files)
+        if ctx.repo_map is not None:
+            preferred = [
+                node.path
+                for node in ctx.repo_map.nodes
+                if node.node_type in {"module", "service", "schema"} and node.path.endswith(".py")
+            ]
+            return preferred[:20] or None
+        return None
+
+    def _candidate_files_for_impact(self, ctx: RunContext) -> list[str] | None:
+        candidates: list[str] = []
+        seen: set[str] = set()
+        for path in (ctx.contract_report.matched_files if ctx.contract_report else []):
+            if path not in seen:
+                seen.add(path)
+                candidates.append(path)
+        if ctx.local_retrieval_report:
+            for path in ctx.local_retrieval_report.matched_files:
+                if path not in seen:
+                    seen.add(path)
+                    candidates.append(path)
+        return candidates or None
+
+    def _should_escalate_after_contract(self, ctx: RunContext) -> bool:
+        if ctx.retrieval_decision is None or ctx.contract_report is None:
+            return False
+        if ctx.retrieval_decision.retrieval_level != RetrievalLevel.LOCAL:
+            return False
+        if ctx.retrieval_escalations > 0:
+            return False
+        return not ctx.contract_report.function_contracts
+
+    def _should_escalate_after_impact(self, ctx: RunContext) -> bool:
+        if ctx.retrieval_decision is None or ctx.impact_report is None:
+            return False
+        if ctx.retrieval_decision.retrieval_level != RetrievalLevel.LOCAL:
+            return False
+        if ctx.retrieval_escalations > 0:
+            return False
+        return not ctx.impact_report.affected_files

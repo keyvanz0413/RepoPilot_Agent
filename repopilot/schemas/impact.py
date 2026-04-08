@@ -15,6 +15,7 @@ class ImpactReport:
     target: str
     matched_symbol: str | None = None
     risk_level: str = "low"
+    searched_files: list[str] = field(default_factory=list)
     affected_files: list[str] = field(default_factory=list)
     references: list[SymbolReference] = field(default_factory=list)
     related_tests: list[str] = field(default_factory=list)

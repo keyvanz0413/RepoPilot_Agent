@@ -17,5 +17,6 @@ class ContractReport:
     matched_symbol: str | None = None
     matched_files: list[str] = field(default_factory=list)
     function_contracts: list[FunctionContract] = field(default_factory=list)
+    searched_files: list[str] = field(default_factory=list)
     uncertainties: list[str] = field(default_factory=list)
     summary: str = ""

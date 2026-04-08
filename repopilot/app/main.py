@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
 from repopilot.app.logging import JsonlLogger
 from repopilot.app.orchestrator import Orchestrator
+from repopilot.models.llm import EnvJSONRetrievalLLM
 from repopilot.schemas.run_context import RunContext
 from repopilot.schemas.task import TaskInput
 from repopilot.tools.file_tools import FileTools
@@ -60,6 +62,11 @@ def main() -> None:
     registry = build_registry(repo_root)
     logger = JsonlLogger(Path(repo_root) / "logs")
     orchestrator = Orchestrator(registry, logger)
+    if "REPOPILOT_RETRIEVAL_DECISION_JSON" in os.environ:
+        orchestrator.retrieval_decider.llm = EnvJSONRetrievalLLM()
+        orchestrator.retrieval_decider.mode = (
+            os.environ.get("REPOPILOT_RETRIEVAL_MODE", "auto").lower()
+        )
     result = orchestrator.run(ctx)
     print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
 

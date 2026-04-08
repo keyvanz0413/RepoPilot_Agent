@@ -10,7 +10,7 @@ class ImpactAnalyzer:
     def __init__(self, repo_root: str) -> None:
         self.repo_root = Path(repo_root).resolve()
 
-    def run(self, contract_report: ContractReport) -> ImpactReport:
+    def run(self, contract_report: ContractReport, candidate_files: list[str] | None = None) -> ImpactReport:
         symbol = contract_report.matched_symbol
         report = ImpactReport(target=contract_report.target, matched_symbol=symbol)
         if not symbol:
@@ -23,13 +23,10 @@ class ImpactAnalyzer:
         affected_files: set[str] = set()
         related_tests: set[str] = set()
 
-        for path in sorted(self.repo_root.rglob("*")):
-            if not path.is_file():
-                continue
-            if ".git" in path.parts or "logs" in path.parts:
-                continue
-            if path.suffix not in {".py", ".js", ".ts", ".tsx"}:
-                continue
+        paths_to_scan = self._resolve_candidate_paths(candidate_files)
+        report.searched_files = [str(path.relative_to(self.repo_root)) for path in paths_to_scan]
+
+        for path in paths_to_scan:
 
             rel = str(path.relative_to(self.repo_root))
             try:
@@ -62,6 +59,8 @@ class ImpactAnalyzer:
         if report.related_tests:
             report.impact_reasons.append("Related test files mention the target symbol")
         if not report.affected_files:
+            if candidate_files:
+                report.impact_reasons.append("Restricted candidate file set produced no references")
             report.impact_reasons.append("No references found outside contract search")
         elif not report.related_tests:
             for path in report.affected_files:
@@ -75,6 +74,39 @@ class ImpactAnalyzer:
                 report.impact_reasons.append("Matched likely test files by affected module names")
 
         report.summary = (
-            f"Found {reference_count} reference(s) across {len(report.affected_files)} file(s)."
+            f"Found {reference_count} reference(s) across {len(report.affected_files)} file(s)"
+            f" after searching {len(report.searched_files)} file(s)."
         )
         return report
+
+    def _iter_source_files(self) -> list[Path]:
+        paths: list[Path] = []
+        for path in sorted(self.repo_root.rglob("*")):
+            if not path.is_file():
+                continue
+            if ".git" in path.parts or "logs" in path.parts:
+                continue
+            if path.suffix not in {".py", ".js", ".ts", ".tsx"}:
+                continue
+            paths.append(path)
+        return paths
+
+    def _resolve_candidate_paths(self, candidate_files: list[str] | None) -> list[Path]:
+        if not candidate_files:
+            return self._iter_source_files()
+
+        resolved: list[Path] = []
+        seen: set[Path] = set()
+        for rel_path in candidate_files:
+            path = (self.repo_root / rel_path).resolve()
+            if path.suffix not in {".py", ".js", ".ts", ".tsx"} or not path.exists():
+                continue
+            try:
+                path.relative_to(self.repo_root)
+            except ValueError:
+                continue
+            if path in seen:
+                continue
+            seen.add(path)
+            resolved.append(path)
+        return resolved or self._iter_source_files()
