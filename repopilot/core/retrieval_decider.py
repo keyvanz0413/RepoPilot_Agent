@@ -8,7 +8,7 @@ from repopilot.schemas.task import TaskSpec
 
 
 class RetrievalDecider:
-    HIGH_RISK_TASKS = {"bug_fix", "add_feature", "refactor"}
+    HIGH_RISK_TASKS = {"bug_fix", "add_feature", "refactor", "add_test"}
     VALID_RISK_LEVELS = {"low", "medium", "high"}
 
     def __init__(self, llm: RetrievalLLM | None = None, mode: str | None = None) -> None:
@@ -60,48 +60,107 @@ class RetrievalDecider:
         if not isinstance(reason, str) or not reason.strip():
             raise TypeError("reason must be a non-empty string")
 
+        decision_reasons = payload.get("decision_reasons", [])
+        if not isinstance(decision_reasons, list) or not all(
+            isinstance(item, str) and item.strip() for item in decision_reasons
+        ):
+            decision_reasons = [reason.strip()]
+
         risk_level = payload.get("risk_level", "medium")
         if risk_level not in self.VALID_RISK_LEVELS:
             raise ValueError("risk_level must be low, medium, or high")
+
+        confidence = payload.get("confidence", 0.8)
+        if not isinstance(confidence, (int, float)):
+            raise TypeError("confidence must be numeric")
 
         return RetrievalDecision(
             retrieval_level=normalized_level,
             search_targets=search_targets[:8],
             reason=reason.strip(),
+            decision_reasons=decision_reasons[:5],
             risk_level=risk_level,
+            confidence=float(confidence),
             summary="",
             source="llm",
             fallback_used=False,
         )
 
     def _heuristic_decision(self, task_spec: TaskSpec, fallback_used: bool) -> RetrievalDecision:
-        intent = task_spec.intent.lower()
         targets = self._extract_targets(task_spec)
+        has_concrete_target = bool(
+            task_spec.target_files
+            or task_spec.target_symbols
+            or task_spec.scope_hint in {"symbol", "file", "module"}
+        )
+        scores = {
+            RetrievalLevel.LIGHT: 0,
+            RetrievalLevel.LOCAL: 0,
+            RetrievalLevel.GLOBAL: 0,
+        }
+        decision_reasons: list[str] = []
 
-        mentions_repo = "repo" in intent or "仓库" in task_spec.intent or "代码库" in task_spec.intent
-        mentions_specific_target = any(
-            marker in task_spec.intent for marker in ("`", "/", ".", "_")
-        ) or len(targets) > 1
+        if task_spec.task_type in self.HIGH_RISK_TASKS:
+            if has_concrete_target:
+                scores[RetrievalLevel.LOCAL] += 2
+                scores[RetrievalLevel.GLOBAL] += 1
+                decision_reasons.append(
+                    "High-risk modification task can start locally when the target is concrete."
+                )
+                decision_reasons.append(
+                    "Retrieval should escalate to repository-wide context if local evidence is insufficient."
+                )
+            else:
+                scores[RetrievalLevel.GLOBAL] += 3
+                decision_reasons.append(
+                    "High-risk modification task without a concrete target prefers repository-wide retrieval."
+                )
+        if task_spec.task_type == "doc_update":
+            scores[RetrievalLevel.LIGHT] += 3
+            decision_reasons.append("Documentation update with explicit targets can stay lightweight.")
+        if task_spec.task_type == "explain_target":
+            scores[RetrievalLevel.LOCAL] += 3
+            decision_reasons.append("Targeted explanation should start from local retrieval.")
+        if task_spec.scope_hint == "repo":
+            scores[RetrievalLevel.GLOBAL] += 3
+            decision_reasons.append("Task scope explicitly targets repository-level understanding.")
+        if task_spec.scope_hint in {"symbol", "file", "module"}:
+            scores[RetrievalLevel.LOCAL] += 2
+            decision_reasons.append("Task has a concrete target that supports local retrieval first.")
+        if task_spec.target_files:
+            scores[RetrievalLevel.LOCAL] += 2
+            decision_reasons.append("Explicit target files were extracted from the task.")
+        if task_spec.target_symbols:
+            scores[RetrievalLevel.LOCAL] += 2
+            decision_reasons.append("Explicit target symbols were extracted from the task.")
+        if task_spec.task_type == "explain_repo" and task_spec.scope_hint == "unknown":
+            scores[RetrievalLevel.LIGHT] += 2
+            decision_reasons.append("Explain-style task with no concrete target can start with lightweight retrieval.")
+        if not task_spec.target_files and not task_spec.target_symbols and task_spec.task_type != "explain_repo":
+            scores[RetrievalLevel.GLOBAL] += 1
+            decision_reasons.append("Missing concrete targets increases the need for wider retrieval.")
 
-        if task_spec.task_type in self.HIGH_RISK_TASKS or mentions_repo:
-            retrieval_level = RetrievalLevel.GLOBAL
-            risk_level = "high"
-            reason = "Task is broad or high risk, so repository-wide mapping should run first."
-        elif task_spec.task_type == "explain_repo" and mentions_specific_target:
-            retrieval_level = RetrievalLevel.LOCAL
-            risk_level = "low"
-            reason = "Task is narrow and target-specific, so local retrieval is enough before validation."
+        retrieval_level = max(scores, key=scores.get)
+        confidence = min(0.95, 0.45 + 0.1 * scores[retrieval_level])
+        if task_spec.task_type in self.HIGH_RISK_TASKS:
+            risk_level = "high" if retrieval_level == RetrievalLevel.GLOBAL else "medium"
         else:
-            retrieval_level = RetrievalLevel.LIGHT
-            risk_level = "low"
-            reason = "Task appears simple enough to start with lightweight retrieval only."
+            risk_level = "high" if retrieval_level == RetrievalLevel.GLOBAL else "low"
+        if retrieval_level == RetrievalLevel.GLOBAL:
+            reason = "Task requires repository-wide retrieval before validation."
+        elif retrieval_level == RetrievalLevel.LOCAL:
+            reason = "Task can start with targeted local retrieval before validation."
+        else:
+            reason = "Task can start with lightweight retrieval and defer broader searches."
 
         summary = f"Retrieval decision: {retrieval_level.value} for {task_spec.task_type}."
         return RetrievalDecision(
             retrieval_level=retrieval_level,
             search_targets=targets,
             reason=reason,
+            decision_reasons=decision_reasons[:5],
             risk_level=risk_level,
+            confidence=confidence,
             summary=summary,
             source="heuristic",
             fallback_used=fallback_used,
@@ -112,6 +171,8 @@ class RetrievalDecider:
         cleaned_target = task_spec.target.strip()
         if cleaned_target:
             targets.append(cleaned_target)
+        targets.extend(task_spec.target_files)
+        targets.extend(task_spec.target_symbols)
 
         for token in task_spec.intent.replace("`", " ").split():
             normalized = token.strip(".,:;()[]{}")

@@ -11,6 +11,7 @@ from repopilot.app.logging import JsonlLogger
 from repopilot.app.orchestrator import Orchestrator
 from repopilot.models.codex import EnvJSONCodexExecutor
 from repopilot.models.llm import EnvJSONRetrievalLLM
+from repopilot.models.ollama import OllamaCodexExecutor, OllamaConfig, OllamaRetrievalLLM
 from repopilot.schemas.run_context import RunContext
 from repopilot.schemas.task import TaskInput
 from repopilot.tools.file_tools import FileTools
@@ -63,13 +64,20 @@ def main() -> None:
     registry = build_registry(repo_root)
     logger = JsonlLogger(Path(repo_root) / "logs")
     orchestrator = Orchestrator(registry, logger)
+    use_ollama = os.environ.get("REPOPILOT_USE_OLLAMA", "1").lower() not in {"0", "false", "no"}
+    ollama_config = OllamaConfig.from_env()
     if "REPOPILOT_RETRIEVAL_DECISION_JSON" in os.environ:
         orchestrator.retrieval_decider.llm = EnvJSONRetrievalLLM()
         orchestrator.retrieval_decider.mode = (
             os.environ.get("REPOPILOT_RETRIEVAL_MODE", "auto").lower()
         )
+    elif use_ollama:
+        orchestrator.retrieval_decider.llm = OllamaRetrievalLLM(ollama_config)
+        orchestrator.retrieval_decider.mode = "auto"
     if "REPOPILOT_CODEX_EDIT_JSON" in os.environ:
         orchestrator.coder.executor = EnvJSONCodexExecutor()
+    elif use_ollama:
+        orchestrator.coder.executor = OllamaCodexExecutor(ollama_config)
     result = orchestrator.run(ctx)
     print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
 

@@ -4,7 +4,7 @@ import ast
 import re
 from pathlib import Path
 
-from repopilot.schemas.contract import ContractReport, FunctionContract
+from repopilot.schemas.contract import CodeTarget, ContractReport, FunctionContract
 from repopilot.schemas.task import TaskSpec
 
 
@@ -27,6 +27,9 @@ class ContractValidator:
         self.repo_root = Path(repo_root).resolve()
 
     def run(self, task_spec: TaskSpec, candidate_files: list[str] | None = None) -> ContractReport:
+        if task_spec.task_type in {"doc_update", "explain_target"} and task_spec.target_files:
+            return self._validate_file_targets(task_spec, candidate_files)
+
         symbol = self._guess_symbol(task_spec)
         report = ContractReport(target=task_spec.target, matched_symbol=symbol)
         if not symbol:
@@ -44,6 +47,8 @@ class ContractValidator:
         report.searched_files = [str(path.relative_to(self.repo_root)) for path in preferred_paths]
 
         if not report.function_contracts:
+            if task_spec.task_type in {"bug_fix", "add_feature", "refactor", "add_test"} and task_spec.target_files:
+                return self._validate_code_file_targets(task_spec, report, candidate_files)
             if candidate_files:
                 report.uncertainties.append(
                     "Symbol was not found in the restricted candidate file set"
@@ -56,6 +61,83 @@ class ContractValidator:
             f"Found {len(report.function_contracts)} contract match(es) for symbol '{symbol}'"
             f" after searching {len(report.searched_files)} file(s)."
         )
+        return report
+
+    def _validate_file_targets(
+        self,
+        task_spec: TaskSpec,
+        candidate_files: list[str] | None = None,
+    ) -> ContractReport:
+        report = ContractReport(target=task_spec.target)
+        candidate_set = set(candidate_files or task_spec.target_files)
+        matched_files: list[str] = []
+        searched_files: list[str] = []
+
+        for rel_path in task_spec.target_files:
+            path = (self.repo_root / rel_path).resolve()
+            if not path.exists():
+                report.uncertainties.append(f"Target file does not exist: {rel_path}")
+                continue
+            try:
+                path.relative_to(self.repo_root)
+            except ValueError:
+                report.uncertainties.append(f"Target file is outside repo root: {rel_path}")
+                continue
+            if candidate_set and rel_path not in candidate_set:
+                continue
+            searched_files.append(rel_path)
+            matched_files.append(rel_path)
+
+        report.matched_files = matched_files
+        report.searched_files = searched_files
+        report.matched_symbol = task_spec.target_symbols[0] if task_spec.target_symbols else None
+        if matched_files:
+            report.summary = (
+                f"Validated {len(matched_files)} explicit target file(s) for {task_spec.task_type}."
+            )
+        else:
+            report.summary = "No explicit target files could be validated."
+        return report
+
+    def _validate_code_file_targets(
+        self,
+        task_spec: TaskSpec,
+        report: ContractReport,
+        candidate_files: list[str] | None = None,
+    ) -> ContractReport:
+        candidate_set = set(candidate_files or task_spec.target_files)
+        matched_files: list[str] = []
+
+        for rel_path in task_spec.target_files:
+            path = (self.repo_root / rel_path).resolve()
+            if not path.exists() or path.suffix != ".py":
+                continue
+            try:
+                path.relative_to(self.repo_root)
+            except ValueError:
+                continue
+            if candidate_set and rel_path not in candidate_set:
+                continue
+            matched_files.append(rel_path)
+
+        if matched_files:
+            report.matched_files = matched_files
+            report.code_targets = [
+                CodeTarget(path=rel_path, target_kind="file", symbol=report.matched_symbol)
+                for rel_path in matched_files
+            ]
+            report.summary = (
+                f"Validated {len(matched_files)} file-level code target(s) for {task_spec.task_type}."
+            )
+            report.uncertainties.append(
+                "No function contract was found, so the workflow fell back to file-level code targets."
+            )
+            return report
+
+        if candidate_files:
+            report.uncertainties.append("Symbol was not found in the restricted candidate file set")
+        report.uncertainties.append(f"Symbol '{report.matched_symbol}' not found in Python source")
+        report.summary = f"No Python function contract found for symbol '{report.matched_symbol}'."
         return report
 
     def _guess_symbol(self, task_spec: TaskSpec) -> str | None:

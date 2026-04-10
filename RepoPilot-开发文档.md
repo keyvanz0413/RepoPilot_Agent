@@ -14,6 +14,24 @@
 
 你最终要做出的不是一个“什么都想做”的系统，而是一个**可运行、可讲、可扩展**的 demo。
 
+## 1.1 当前代码状态
+
+当前 RepoPilot 已经不再是最初那种固定流水线 demo，而是一个第一版混合式 Agent runtime，已经具备：
+
+- 轻状态机：`TASK_INTAKE -> RETRIEVE -> PLAN -> ACT -> VERIFY -> RECOVER`
+- `RETRIEVE` 阶段内动态检索与升级
+- `PLAN` 输出结构化 execution contract
+- `ACT` 按任务类型和 executor 路由
+- `VERIFY` 的 scope / test / noop 校验
+- `RECOVER` 的 retry / switch executor / rollback + replan
+- 本地 Ollama `gemma4:26b` 驱动 retrieval 与 file-level code editing
+
+所以这份文档现在除了“从 0 到 1”，也要回答：
+
+- 当前已经做到哪里
+- 为什么架构从固定 workflow 演进成混合模式
+- 下一阶段应该优先补哪一层
+
 ## 2. 开发总原则
 
 ### 原则一：先做闭环，再做高级能力
@@ -90,19 +108,26 @@
 - 完整 benchmark 平台
 - 复杂权限系统
 
-### 3.3 MVP 验收标准
+### 3.3 当前 MVP 完成度
 
-如果系统能完成下面流程，就算第一版成功：
+当前代码已经完成了第一版 MVP 的核心闭环：
 
-- 接收一个任务
-- 自动生成 repo map
-- 自动核验相关契约
-- 自动分析依赖影响
-- 自动生成 plan
-- 自动修改 1~3 个文件
-- 自动跑相关测试
-- 输出 diff 和总结
-- 失败时至少能回滚或重试一次
+- 接收任务并结构化 task type / target / scope
+- 动态决定 retrieval level
+- 做 local / global retrieval
+- 自动核验 contract
+- 自动分析 impact
+- 自动生成 execution plan
+- 按任务类型路由执行器
+- 在需要时调用本地 Ollama 执行 file-level code edit
+- 在失败时做 retry / switch executor / rollback + replan
+
+当前还没有彻底做强的部分是：
+
+- 更丰富的 retrieval action set
+- 更通用的 builtin code editing
+- 更细的 approval / HITL
+- 更稳定的 memory / repo preference
 
 ## 4. 第二阶段：项目结构搭建
 
@@ -114,51 +139,41 @@ repopilot/
 │   ├── main.py
 │   ├── orchestrator.py
 │   ├── state_machine.py
-│   ├── config.py
-│   │
-│   ├── agents/
-│   │   ├── planner.py
-│   │   ├── coder.py
-│   │   ├── reviewer.py
-│   │
-│   ├── tools/
-│   │   ├── file_tools.py
-│   │   ├── search_tools.py
-│   │   ├── repomap.py
-│   │   ├── contract_tools.py
-│   │   ├── impact_tools.py
-│   │   ├── git_tools.py
-│   │   ├── test_runner.py
-│   │   ├── safety_guard.py
-│   │
-│   ├── core/
-│   │   ├── task_analyzer.py
-│   │   ├── retrieval_decision.py
-│   │   ├── contract_validator.py
-│   │   ├── impact_analyzer.py
-│   │   ├── recovery_manager.py
-│   │
-│   ├── prompts/
-│   │   ├── planner.txt
-│   │   ├── coder.txt
-│   │   ├── reviewer.txt
-│   │
-│   ├── schemas/
-│   │   ├── task.py
-│   │   ├── state.py
-│   │   ├── contract.py
-│   │   ├── impact.py
-│   │   ├── review.py
-│   │
-│   ├── models/
-│   │   ├── llm.py
-│   │
-│   └── memory/
-│       ├── task_memory.py
-│       ├── preference_memory.py
-│
+│   └── logging.py
+├── agents/
+│   ├── planner.py
+│   ├── coder.py
+│   └── reviewer.py
+├── core/
+│   ├── contract_validator.py
+│   ├── impact_analyzer.py
+│   ├── local_retriever.py
+│   ├── recovery_manager.py
+│   ├── repo_instructions.py
+│   ├── repo_mapper.py
+│   └── retrieval_decider.py
+├── models/
+│   ├── llm.py
+│   ├── codex.py
+│   └── ollama.py
+├── schemas/
+│   ├── task.py
+│   ├── contract.py
+│   ├── impact.py
+│   ├── plan.py
+│   ├── edit.py
+│   ├── recovery.py
+│   ├── review.py
+│   ├── retrieval.py
+│   └── run_context.py
+├── tools/
+│   ├── file_tools.py
+│   ├── search_tools.py
+│   ├── git_tools.py
+│   ├── test_runner.py
+│   ├── safety_guard.py
+│   └── tool_registry.py
 ├── logs/
-├── examples/
 ├── tests/
 ├── README.md
 ```
@@ -364,25 +379,26 @@ repopilot/
 
 ### 6.3 定义状态机
 
-**状态**
+当前实现已经从细粒度状态转成治理型状态机：
 
 - INIT
-- ANALYZE_TASK
-- DECIDE_RETRIEVAL
-- MAP_REPO
-- VALIDATE_CONTRACT
-- ANALYZE_IMPACT
+- TASK_INTAKE
+- RETRIEVE
 - PLAN
-- EDIT
-- TEST
-- REVIEW
+- ACT
+- VERIFY
 - RECOVER
-- DONE
+- DONE / FAILED
 
-**为什么这时候做**
+这里的关键不是状态数量变少，而是分层更清楚：
 
-因为工具层完成后，状态机就是主骨架。
-先把骨架搭起来，再往里面填 agent。
+- 状态机只负责治理和阶段切换
+- `RETRIEVE` 内部做动态检索
+- `PLAN` 决定 executor 和 edit scope
+- `ACT` 只执行
+- `VERIFY / RECOVER` 显式接管失败控制流
+
+这也是 RepoPilot 从“固定 workflow”演进成“混合式 Agent runtime”的核心变化。
 
 ## 7. 第五阶段：实现核心逻辑模块（非 LLM）
 
@@ -481,7 +497,17 @@ repopilot/
 
 ## 8. 第六阶段：接入最小 Agent 层
 
-到这里才开始接入 LLM。
+当前这一阶段已经完成，而且不再是“只接一个 LLM”这么简单。
+
+现状是：
+
+- retrieval decision 可由本地 Ollama 驱动
+- file-level code editing 的 `codex` executor 可由本地 Ollama 驱动
+- planner / reviewer / recovery 仍然由系统层控制
+
+这正是当前 RepoPilot 的核心路线：
+
+> 状态机做治理，LLM 只进入最需要智能决策的阶段
 
 ### 8.1 `planner.py`
 
@@ -572,17 +598,15 @@ reviewer 负责质量把关。
 
 ```text
 接收任务
-→ task analyzer
-→ retrieval decision
-→ repo map
-→ contract validation
-→ impact analysis
-→ planner
-→ create checkpoint
-→ coder patch
-→ test runner
-→ reviewer
-→ done / recover
+→ TASK_INTAKE
+→ RETRIEVE
+  ↳ local search / repo map / contract / impact
+→ PLAN
+  ↳ executor contract
+→ ACT
+  ↳ analysis / builtin_doc / builtin_test / builtin_code / codex
+→ VERIFY
+→ DONE / RECOVER
 ```
 
 ## 10. 第八阶段：补日志与可观测性
@@ -687,16 +711,16 @@ reviewer 负责质量把关。
 
 ## 15. 建议开发顺序总表
 
-1. 建项目目录、配置、日志目录
-2. 实现 file tools / search tools / git tools / test runner
-3. 实现 repo map / contract tools / impact tools
-4. 定义 schemas 和 state machine
-5. 实现 task analyzer / retrieval decision / contract validator / impact analyzer / recovery manager
-6. 实现 planner / coder / reviewer
-7. 实现 orchestrator，跑通一条闭环
-8. 加入 safety guard 和 approval
-9. 加入 logs 和最小 memory
-10. 做 demo case 和最小 benchmark
+上面那套顺序对应的是从 0 到第一版闭环。
+
+如果以当前代码为起点，下一阶段更合理的顺序是：
+
+1. 扩展 `RETRIEVE` 的 action set
+2. 做更强的 executor contract 和 edit verification
+3. 增强 builtin code path，减少 file-level task 对 Ollama 的硬依赖
+4. 补 approval / HITL
+5. 补 memory / repo preference
+6. 做更系统的 demo case 和 benchmark
 
 ## 16. 两天开发计划
 
@@ -737,9 +761,14 @@ reviewer 负责质量把关。
 
 因为 agent 的能力边界本质上由工具决定，而不是由 prompt 决定。
 
-### 学什么 2：为什么先做 schema 和状态机
+### 学什么 2：为什么状态机现在要变“轻”
 
-因为结构化输入输出可以防止系统失控，也方便后续做日志、评估和恢复。
+因为现在要解决的问题已经不是“有没有流程”，而是“流程是否足够灵活，同时还能被治理”。
+
+所以当前 RepoPilot 的做法不是继续把状态拆细，而是：
+
+- 用少量治理状态稳定外层
+- 在阶段内部引入动态决策
 
 ### 学什么 3：为什么要先做 contract validation
 

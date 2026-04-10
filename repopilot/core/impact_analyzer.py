@@ -4,13 +4,24 @@ from pathlib import Path
 
 from repopilot.schemas.contract import ContractReport
 from repopilot.schemas.impact import ImpactReport, SymbolReference
+from repopilot.schemas.task import TaskSpec
 
 
 class ImpactAnalyzer:
     def __init__(self, repo_root: str) -> None:
         self.repo_root = Path(repo_root).resolve()
 
-    def run(self, contract_report: ContractReport, candidate_files: list[str] | None = None) -> ImpactReport:
+    def run(
+        self,
+        contract_report: ContractReport,
+        candidate_files: list[str] | None = None,
+        task_spec: TaskSpec | None = None,
+    ) -> ImpactReport:
+        if task_spec and task_spec.task_type == "doc_update":
+            return self._analyze_doc_impact(contract_report)
+        if task_spec and task_spec.task_type == "explain_target" and contract_report.matched_files:
+            return self._analyze_file_reference_impact(contract_report, candidate_files)
+
         symbol = contract_report.matched_symbol
         report = ImpactReport(target=contract_report.target, matched_symbol=symbol)
         if not symbol:
@@ -75,6 +86,62 @@ class ImpactAnalyzer:
 
         report.summary = (
             f"Found {reference_count} reference(s) across {len(report.affected_files)} file(s)"
+            f" after searching {len(report.searched_files)} file(s)."
+        )
+        return report
+
+    def _analyze_doc_impact(self, contract_report: ContractReport) -> ImpactReport:
+        report = ImpactReport(
+            target=contract_report.target,
+            matched_symbol=contract_report.matched_symbol,
+            risk_level="low",
+            searched_files=list(contract_report.matched_files),
+            affected_files=list(contract_report.matched_files),
+        )
+        report.impact_reasons.append("Documentation tasks stay file-scoped unless later steps require more.")
+        report.summary = (
+            f"Kept impact analysis scoped to {len(report.affected_files)} explicit documentation file(s)."
+        )
+        return report
+
+    def _analyze_file_reference_impact(
+        self,
+        contract_report: ContractReport,
+        candidate_files: list[str] | None,
+    ) -> ImpactReport:
+        report = ImpactReport(target=contract_report.target, matched_symbol=contract_report.matched_symbol)
+        target_paths = list(contract_report.matched_files)
+        target_tokens = {Path(path).name for path in target_paths}
+        target_tokens.update(path for path in target_paths)
+
+        refs: list[SymbolReference] = []
+        affected_files: set[str] = set()
+        paths_to_scan = self._resolve_candidate_paths(candidate_files)
+        report.searched_files = [str(path.relative_to(self.repo_root)) for path in paths_to_scan]
+
+        for path in paths_to_scan:
+            rel = str(path.relative_to(self.repo_root))
+            if rel in target_paths:
+                continue
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+            for idx, line in enumerate(lines, start=1):
+                if not any(token in line for token in target_tokens):
+                    continue
+                refs.append(SymbolReference(path=rel, line=idx, text=line.strip()))
+                affected_files.add(rel)
+
+        report.references = refs[:50]
+        report.affected_files = sorted(affected_files)
+        report.risk_level = "low" if len(report.references) <= 5 else "medium"
+        if report.affected_files:
+            report.impact_reasons.append("Found references to the explicit target file in related source files.")
+        else:
+            report.impact_reasons.append("No source references to the explicit target file were found.")
+        report.summary = (
+            f"Found {len(report.references)} file reference(s) across {len(report.affected_files)} file(s)"
             f" after searching {len(report.searched_files)} file(s)."
         )
         return report

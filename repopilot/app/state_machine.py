@@ -8,16 +8,10 @@ TERMINAL_STATES = {RunState.DONE, RunState.FAILED}
 
 def next_state(current: RunState) -> RunState:
     transitions = {
-        RunState.INIT: RunState.ANALYZE_TASK,
-        RunState.ANALYZE_TASK: RunState.DECIDE_RETRIEVAL,
-        RunState.DECIDE_RETRIEVAL: RunState.LOCAL_RETRIEVE,
-        RunState.LOCAL_RETRIEVE: RunState.VALIDATE_CONTRACT,
-        RunState.ESCALATE_RETRIEVAL: RunState.MAP_REPO,
-        RunState.MAP_REPO: RunState.VALIDATE_CONTRACT,
-        RunState.VALIDATE_CONTRACT: RunState.ANALYZE_IMPACT,
-        RunState.ANALYZE_IMPACT: RunState.PLAN,
-        RunState.PLAN: RunState.EDIT,
-        RunState.EDIT: RunState.TEST,
-        RunState.TEST: RunState.REVIEW,
+        RunState.INIT: RunState.TASK_INTAKE,
+        RunState.TASK_INTAKE: RunState.RETRIEVE,
+        RunState.RETRIEVE: RunState.PLAN,
+        RunState.PLAN: RunState.ACT,
+        RunState.ACT: RunState.VERIFY,
     }
     return transitions.get(current, RunState.FAILED)

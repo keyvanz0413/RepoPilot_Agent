@@ -23,6 +23,7 @@ class RunContext:
     state: RunState = RunState.INIT
     task_spec: TaskSpec | None = None
     retrieval_decision: RetrievalDecision | None = None
+    retrieval_trace: list[str] = field(default_factory=list)
     local_retrieval_report: LocalRetrievalReport | None = None
     repo_map: RepoMap | None = None
     contract_report: ContractReport | None = None
@@ -34,6 +35,7 @@ class RunContext:
     recovery_action: RecoveryAction | None = None
     tool_results: list[ToolResult] = field(default_factory=list)
     checkpoint_ref: str | None = None
+    available_executors: list[str] = field(default_factory=list)
     retrieval_escalations: int = 0
     recovery_attempts: int = 0
     failure_reason: str | None = None

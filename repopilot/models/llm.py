@@ -40,13 +40,17 @@ class EnvJSONRetrievalLLM:
 def build_retrieval_prompt(task_spec: TaskSpec) -> RetrievalPrompt:
     system = (
         "You are deciding a retrieval level for a repository agent before contract validation. "
-        "Return JSON only with keys retrieval_level, search_targets, reason, and risk_level. "
-        "retrieval_level must be one of LIGHT, LOCAL, GLOBAL."
+        "Prefer LOCAL for concrete file or symbol targets, GLOBAL for repository-wide understanding, "
+        "and LIGHT only when broader retrieval can be safely deferred. "
+        "Return JSON only."
     )
     user = (
         f"task_type: {task_spec.task_type}\n"
         f"target: {task_spec.target}\n"
         f"intent: {task_spec.intent}\n"
+        f"target_files: {', '.join(task_spec.target_files) if task_spec.target_files else '(none)'}\n"
+        f"target_symbols: {', '.join(task_spec.target_symbols) if task_spec.target_symbols else '(none)'}\n"
+        f"scope_hint: {task_spec.scope_hint}\n"
         f"constraints: {', '.join(task_spec.constraints) if task_spec.constraints else '(none)'}"
     )
     return RetrievalPrompt(system=system, user=user)

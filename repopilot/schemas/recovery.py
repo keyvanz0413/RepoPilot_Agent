@@ -10,3 +10,4 @@ class RecoveryAction:
     reason: str
     rollback_files: list[str] = field(default_factory=list)
     replan_required: bool = False
+    next_executor: str | None = None

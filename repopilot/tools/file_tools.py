@@ -23,6 +23,7 @@ class FileTools:
 
     def write_file(self, path: str, content: str) -> dict:
         resolved = self.safety_guard.ensure_path_allowed(path)
+        resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content, encoding="utf-8")
         return {
             "path": str(resolved),
